@@ -1,0 +1,9 @@
+/.venv
+README.MD
+/Inclde
+/Lib\site-paskages
+/Scripts
+/share
+pyvenv.cfg
+/__pycache__
+*.pyc
