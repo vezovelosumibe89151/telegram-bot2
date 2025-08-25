@@ -68,12 +68,15 @@ qdrant = QdrantClient(
 # Название коллекции
 COLLECTION_NAME = "bowling_knowledge"
 
-# Создаем коллекцию (если ее еще нет)
-qdrant.recreate_collection(
-    collection_name=COLLECTION_NAME,
-    vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE)  
-    # size=384 — это размерность эмбеддингов для модели all-MiniLM-L6-v2
-)
+# Создаем коллекцию, если её нет
+if not qdrant.collection_exists(COLLECTION_NAME):
+    qdrant.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE)  # size=384 — это размерность эмбеддингов для модели all-MiniLM-L6-v2
+    )
+    print(f"Коллекция '{COLLECTION_NAME}' создана!")
+else:
+    print(f"Коллекция '{COLLECTION_NAME}' уже существует")
 
 # ===============================
 # 4. Создаем эмбеддинги
