@@ -7,3 +7,6 @@ README.MD
 pyvenv.cfg
 /__pycache__
 *.pyc
+service_account.json
+app/service_account.json
+*.json
