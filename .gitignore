@@ -12,3 +12,4 @@ app/service_account.json
 *.json
 .env
 /all_about_project.txt
+ssh-ed255519.pub

@@ -3,7 +3,7 @@ from pydantic import BaseModel
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from app.config import (
-    QDRANT_HOST, QDRANT_PORT, QDRANT_API_KEY, COLLECTION_NAME,
+    QDRANT_HOST, QDRANT_API_KEY, COLLECTION_NAME,
     EMBEDDING_MODEL_NAME
 )
 
@@ -19,8 +19,7 @@ app = FastAPI()
 embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
 client = QdrantClient(
     url=QDRANT_HOST,
-    api_key=QDRANT_API_KEY,
-    port=int(QDRANT_PORT) if QDRANT_PORT else None
+    api_key=QDRANT_API_KEY
 )
 
 
@@ -35,12 +34,16 @@ async def search(request: SearchRequest):
     )
     results = []
     for point in search_result:
+        payload = point.payload
         results.append({
-            "doc_id": point.payload.get("doc_id"),
-            "title": point.payload.get("title"),
-            "text": point.payload.get("text"),
-            "url": point.payload.get("url"),
-            "image_url": point.payload.get("image_url"),
+            "id": payload.get("id"),
+            "question": payload.get("question"),
+            "anwser": payload.get("anwser"),
+            "category": payload.get("category"),
+            "tags": payload.get("tags"),
+            "sourse": payload.get("sourse"),
+            "image_url": payload.get("image_url"),
+            "last_updated": payload.get("last_updated"),
             "score": point.score
         })
     return {"results": results}
