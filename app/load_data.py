@@ -86,8 +86,9 @@ else:
 # Загружаем модель эмбеддингов
 model = SentenceTransformer(EMBEDDING_MODEL_NAME)
 
-# Берем текст из колонки "text" (важно, чтобы в Google Sheets была колонка text!)
-texts = df["text"].tolist()
+
+# Берем текст из колонки "anwser"
+texts = df["anwser"].tolist()
 
 # Превращаем тексты в вектора
 embeddings = model.encode(texts)
@@ -96,14 +97,23 @@ embeddings = model.encode(texts)
 # 5. Загружаем данные в Qdrant
 # ===============================
 
-# Готовим список для вставки
+
+# Готовим список для вставки, payload содержит все поля строки
 points = [
     PointStruct(
-        id=i,                        # уникальный ID записи
-        vector=embeddings[i],        # вектор эмбеддинга
-        payload={"text": texts[i]}   # сам текст тоже сохраняем как payload
+        id=row["id"],
+        vector=embeddings[i],
+        payload={
+            "question": row["question"],
+            "anwser": row["anwser"],
+            "category": row["category"],
+            "tags": row["tags"],
+            "sourse": row["sourse"],
+            "image_url": row["image_url"],
+            "last_updated": row["last_updated"]
+        }
     )
-    for i in range(len(texts))
+    for i, row in df.iterrows()
 ]
 
 # Загружаем в Qdrant
