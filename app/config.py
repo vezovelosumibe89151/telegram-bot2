@@ -4,7 +4,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 QDRANT_HOST = os.getenv("QDRANT_HOST")
-QDRANT_PORT = os.getenv("QDRANT_PORT")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")              # <--- Укажите ваш Qdrant API ключ
 COLLECTION_NAME = "brooklyn_cloud_faq"
 

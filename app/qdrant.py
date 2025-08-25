@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 QDRANT_HOST = os.getenv("QDRANT_HOST")       # URL Qdrant (например: https://xxx.qdrant.cloud)
-QDRANT_PORT = os.getenv("QDRANT_PORT")  # Порт (обычно 6333 для локалки, 443 для облака)
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") # API ключ из облака
 COLLECTION_NAME = "bowling_knowledge"
 
@@ -18,8 +17,7 @@ COLLECTION_NAME = "bowling_knowledge"
 # -------------------------------
 client = QdrantClient(
     url=QDRANT_HOST,
-    api_key=QDRANT_API_KEY,
-    port=int(QDRANT_PORT) if QDRANT_PORT else None
+    api_key=QDRANT_API_KEY
 )
 # -------------------------------
 # 3. Создаём коллекцию, если её ещё нет

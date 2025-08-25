@@ -11,3 +11,4 @@ service_account.json
 app/service_account.json
 *.json
 .env
+/all_about_project.txt
