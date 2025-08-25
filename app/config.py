@@ -10,8 +10,8 @@ COLLECTION_NAME = "brooklyn_cloud_faq"
 SERVICE_ACCOUNT_FILE = os.getenv("SERVICE_ACCOUNT_FILE")  # <--- Укажите путь к вашему JSON-ключу Google Service Account
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")              # <--- Укажите ID вашей Google таблицы
 
-EMBEDDING_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
-EMBEDDING_DIM = 384
+EMBEDDING_MODEL_NAME = "sentence-transformers/all-mpnet-base-v2"
+EMBEDDING_DIM = 768
 
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
