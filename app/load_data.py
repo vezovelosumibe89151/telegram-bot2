@@ -22,7 +22,8 @@ load_dotenv()
 from app.config import (
     SERVICE_ACCOUNT_FILE,
     SPREADSHEET_ID,
-    QDRANT_HOST, QDRANT_PORT,
+    QDRANT_HOST,
+    QDRANT_API_KEY,
     COLLECTION_NAME,
     EMBEDDING_MODEL_NAME,
     EMBEDDING_DIM
@@ -62,7 +63,7 @@ print(df.head())
 
 qdrant = QdrantClient(
     url=QDRANT_HOST,
-    port=int(QDRANT_PORT) if QDRANT_PORT else None
+    api_key=QDRANT_API_KEY
 )
 
 # Название коллекции
