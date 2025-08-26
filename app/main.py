@@ -51,27 +51,30 @@ async def search(request: SearchRequest):
 # Новый GET endpoint для поддержки запросов через URL
 @app.get("/search")
 async def search_get(query: str = Query(..., description="Поисковый запрос"), top_k: int = Query(3, description="Количество результатов")):
-    query_vec = embedder.encode(query).tolist()
-    search_result = client.search(
-        collection_name=COLLECTION_NAME,
-        query_vector=query_vec,
-        limit=top_k
-    )
-    results = []
-    for point in search_result:
-        payload = point.payload
-        results.append({
-            "id": payload.get("id"),
-            "question": payload.get("question"),
-            "anwser": payload.get("anwser"),
-            "category": payload.get("category"),
-            "tags": payload.get("tags"),
-            "sourse": payload.get("sourse"),
-            "image_url": payload.get("image_url"),
-            "last_updated": payload.get("last_updated"),
-            "score": point.score
-        })
-    return {"results": results}
+    try:
+        query_vec = embedder.encode(query).tolist()
+        search_result = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_vec,
+            limit=top_k
+        )
+        results = []
+        for point in search_result:
+            payload = point.payload
+            results.append({
+                "id": payload.get("id"),
+                "question": payload.get("question"),
+                "anwser": payload.get("anwser"),
+                "category": payload.get("category"),
+                "tags": payload.get("tags"),
+                "sourse": payload.get("sourse"),
+                "image_url": payload.get("image_url"),
+                "last_updated": payload.get("last_updated"),
+                "score": point.score
+            })
+        return {"results": results}
+    except Exception as e:
+        return {"results": [], "error": str(e)}
 
 # --- Комментарий: этот эндпоинт вызывается Gigachat Salutebot через Telegram-бота ---
 # Пример запроса:
