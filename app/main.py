@@ -59,12 +59,16 @@ async def search_get(query: str = Query(..., description="Поисковый з�
     )
     results = []
     for point in search_result:
+        payload = point.payload
         results.append({
-            "doc_id": point.payload.get("doc_id"),
-            "title": point.payload.get("title"),
-            "text": point.payload.get("text"),
-            "url": point.payload.get("url"),
-            "image_url": point.payload.get("image_url"),
+            "id": payload.get("id"),
+            "question": payload.get("question"),
+            "anwser": payload.get("anwser"),
+            "category": payload.get("category"),
+            "tags": payload.get("tags"),
+            "sourse": payload.get("sourse"),
+            "image_url": payload.get("image_url"),
+            "last_updated": payload.get("last_updated"),
             "score": point.score
         })
     return {"results": results}
