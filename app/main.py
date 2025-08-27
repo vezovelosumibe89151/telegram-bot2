@@ -50,14 +50,17 @@ async def search(request: SearchRequest):
 
 # Новый GET endpoint для поддержки запросов через URL
 @app.get("/search")
-async def search_get(query: str = Query(..., description="Поисковый запрос")):
+async def search_get(
+    query: str = Query(..., description="Поисковый запрос"),
+    top_k: int = Query(3, description="Количество результатов")
+):
     try:
         query_vec = embedder.encode(query).tolist()
         # Векторный поиск
         search_result = client.search(
             collection_name=COLLECTION_NAME,
             query_vector=query_vec,
-            limit=20  # ищем больше кандидатов для keyword-фильтрации
+            limit=top_k * 5  # ищем больше кандидатов для keyword-фильтрации
         )
         # Keyword-фильтрация: ищем совпадение слова в question или anwser
         query_lower = query.lower()
@@ -71,13 +74,13 @@ async def search_get(query: str = Query(..., description="Поисковый з�
         # Если keyword-совпадений 3 и больше — просим уточнить запрос
         if len(filtered) >= 3:
             return {"results": [], "message": "Опиши свой запрос более конкретно"}
-        # Если есть keyword-совпадения — берем первый
+        # Если есть keyword-совпадения — берем top_k
         if filtered:
-            point = filtered[0]
+            final_points = filtered[:top_k]
         else:
-            point = search_result[0] if search_result else None
+            final_points = search_result[:top_k]
         results = []
-        if point:
+        for point in final_points:
             payload = point.payload
             results.append({
                 "id": payload.get("id"),

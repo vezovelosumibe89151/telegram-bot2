@@ -157,7 +157,6 @@ def main():
         for row in tqdm(rows, desc=f"Читаем лист '{sheet_name}'"):  # Прогресс по строкам листа
             # Формируем payload из всех нужных колонок FAQ
             payload = {
-                "id": row.get("id"),
                 "question": row.get("question"),
                 "anwser": row.get("anwser"),
                 "category": row.get("category"),
@@ -176,11 +175,8 @@ def main():
                 continue
             vec = embedder.encode(text_for_embedding).astype(np.float32)
             # Используем уникальный id из таблицы, если он есть, иначе генерируем UUID
-            raw_id = payload.get("id")
-            if raw_id is None or str(raw_id).strip() == "":
-                pid = str(uuid.uuid4())
-            else:
-                pid = str(raw_id)
+            # Всегда используем UUID для id
+            pid = str(uuid.uuid4())
             point_payload = dict(payload)
             point = PointStruct(
                 id=pid,
