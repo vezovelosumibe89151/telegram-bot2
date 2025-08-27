@@ -166,32 +166,33 @@ def main():
                 "image_url": row.get("image_url"),
                 "last_updated": row.get("last_updated")
             }
-            anwser = payload.get("anwser", "")
-            if not anwser:
+            question = str(payload.get("question") or "")
+            anwser = str(payload.get("anwser") or "")
+            if not anwser and not question:
                 continue
-            # Можно добавить чанкирование, если ответы длинные, иначе просто один чанк
-            chunks = [anwser]
-            for ch in chunks:
-                vec = embedder.encode(ch).astype(np.float32)
-                # Используем уникальный id из таблицы, если он есть, иначе генерируем UUID
-                raw_id = payload.get("id")
-                if raw_id is None or str(raw_id).strip() == "":
-                    pid = str(uuid.uuid4())
-                else:
-                    pid = str(raw_id)
-                point_payload = dict(payload)
-                point_payload["anwser"] = ch
-                point = PointStruct(
-                    id=pid,
-                    vector=vec,
-                    payload=point_payload
-                )
-                points_batch.append(point)
-                total_chunks += 1
-                if len(points_batch) >= 500:
-                    print("POINTS TO UPSERT:", points_batch)
-                    client.upsert(collection_name=COLLECTION_NAME, points=points_batch)
-                    points_batch = []
+            # Вектор строим по объединению question + anwser
+            text_for_embedding = (question + " " + anwser).strip()
+            if not text_for_embedding:
+                continue
+            vec = embedder.encode(text_for_embedding).astype(np.float32)
+            # Используем уникальный id из таблицы, если он есть, иначе генерируем UUID
+            raw_id = payload.get("id")
+            if raw_id is None or str(raw_id).strip() == "":
+                pid = str(uuid.uuid4())
+            else:
+                pid = str(raw_id)
+            point_payload = dict(payload)
+            point = PointStruct(
+                id=pid,
+                vector=vec,
+                payload=point_payload
+            )
+            points_batch.append(point)
+            total_chunks += 1
+            if len(points_batch) >= 500:
+                print("POINTS TO UPSERT:", points_batch)
+                client.upsert(collection_name=COLLECTION_NAME, points=points_batch)
+                points_batch = []
 
     # Записываем «хвост» (остатки менее 500)
     if points_batch:
