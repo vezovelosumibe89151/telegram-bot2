@@ -53,13 +53,25 @@ async def search(request: SearchRequest):
 async def search_get(query: str = Query(..., description="Поисковый запрос"), top_k: int = Query(3, description="Количество результатов")):
     try:
         query_vec = embedder.encode(query).tolist()
+        # Векторный поиск
         search_result = client.search(
             collection_name=COLLECTION_NAME,
             query_vector=query_vec,
-            limit=top_k
+            limit=top_k * 5  # ищем больше кандидатов для keyword-фильтрации
         )
-        results = []
+        # Keyword-фильтрация: ищем совпадение слова в question или anwser
+        query_lower = query.lower()
+        filtered = []
         for point in search_result:
+            payload = point.payload
+            question = str(payload.get("question", "")).lower()
+            anwser = str(payload.get("anwser", "")).lower()
+            if query_lower in question or query_lower in anwser:
+                filtered.append(point)
+        # Если keyword-фильтрация ничего не дала — возвращаем топ по вектору
+        final_points = filtered[:top_k] if filtered else search_result[:top_k]
+        results = []
+        for point in final_points:
             payload = point.payload
             results.append({
                 "id": payload.get("id"),
