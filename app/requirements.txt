@@ -1,13 +1,13 @@
-fastapi==0.110.0            # API-сервис (эндпоинт /search)
-uvicorn[standard]==0.29.0   # HTTP-сервер для FastAPI
-pandas==2.2.2               # Работа с табличными данными
-qdrant-client==1.9.0        # Клиент для Qdrant (векторная база данных)
-sentence-transformers==2.7.0 # Эмбеддинги (векторизация текста)
-numpy==1.26.4               # Численные операции с векторами
-pydantic==2.7.0             # Валидация и описание запросов/ответов в FastAPI
-python-dotenv==1.0.1        # Загрузка конфигурации из .env файла
-tqdm==4.66.4                # Красивые прогресс-бары при импорте данных
-gspread==6.1.2              # Работа с Google Sheets
-google-auth==2.29.0         # Авторизация в Google Sheets через сервисный аккаунт
+fastapi==0.110.0
+uvicorn[standard]==0.29.0
+pandas==2.2.2
+qdrant-client==1.9.0
+sentence-transformers==2.7.0
+numpy==1.26.4
+pydantic==2.7.0
+python-dotenv==1.0.1
+tqdm==4.66.4
+gspread==6.1.2
+google-auth==2.29.0
 python-telegram-bot==20.0
 google-api-python-client==2.126.0

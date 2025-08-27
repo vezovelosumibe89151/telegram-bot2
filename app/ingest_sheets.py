@@ -45,34 +45,14 @@ def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
 
 def ensure_collection(client: QdrantClient, vector_size: int):
     """Создаём коллекцию в Qdrant Cloud, если её нет или пересоздаём при изменении размера вектора."""
-    try:
-        info = client.get_collection(COLLECTION_NAME)
-        current_size = info.vectors_config["default"].size
-        if current_size != vector_size:
-            print(f"[INFO] Размерность коллекции изменилась ({current_size} → {vector_size}), пересоздаём.")
-            client.recreate_collection(
-                collection_name=COLLECTION_NAME,
-                vectors_config=VectorParams(
-                    size=vector_size,
-                    distance=Distance.COSINE
-                )
-            )
-    except Exception:
-        print(f"[INFO] Коллекция '{COLLECTION_NAME}' не найдена, создаём.")
-        client.recreate_collection(
+    if not client.collection_exists(COLLECTION_NAME):
+        print(f"[INFO] Коллекция не найдена, создаём новую '{COLLECTION_NAME}'...")
+        client.create_collection(
             collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(
-                size=vector_size,
-                distance=Distance.COSINE
-            )
+            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
         )
-        client.recreate_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(
-                size=vector_size,
-                distance=Distance.COSINE
-            )
-        )
+    else:
+        print(f"[INFO] Коллекция '{COLLECTION_NAME}' уже существует.")
 
 def get_gspread_client() -> gspread.Client:
     """Авторизуемся в Google с помощью сервисного аккаунта и получаем клиент gspread."""
@@ -148,7 +128,6 @@ def main():
     client = QdrantClient(
         url=QDRANT_HOST,
         api_key=QDRANT_API_KEY,
-        port=int(QDRANT_PORT) if QDRANT_PORT else None
     )  # Создаём клиент Qdrant
 
     # Гарантируем, что коллекция существует и имеет правильную размерность
@@ -176,32 +155,43 @@ def main():
             continue
 
         for row in tqdm(rows, desc=f"Читаем лист '{sheet_name}'"):  # Прогресс по строкам листа
-            payload = normalize_row(row, mapping, sheet_name)  # Приводим строку к унифицированному виду
-            text = payload.get("text", "")                     # Берём основной текст
-
-            if not text:                                       # Если текста нет — пропускаем (нечего индексировать)
+            # Формируем payload из всех нужных колонок FAQ
+            payload = {
+                "id": row.get("id"),
+                "question": row.get("question"),
+                "anwser": row.get("anwser"),
+                "category": row.get("category"),
+                "tags": row.get("tags"),
+                "sourse": row.get("sourse"),
+                "image_url": row.get("image_url"),
+                "last_updated": row.get("last_updated")
+            }
+            anwser = payload.get("anwser", "")
+            if not anwser:
                 continue
-
-            chunks = chunk_text(text, CHUNK_SIZE, CHUNK_OVERLAP)      # Режем текст на чанки
-            for ch in chunks:                                          # Для каждого чанка считаем эмбеддинг
-                vec = embedder.encode(ch).astype(np.float32)           # Векторизуем чанк (float32)
-                pid = str(uuid.uuid4())                                # Уникальный ID точки
-                point_payload = dict(payload)                           # Копируем базовый payload
-                point_payload["text"] = ch                              # Кладём именно текст чанка (не весь документ)
-
-                # Формируем точку для Qdrant
+            # Можно добавить чанкирование, если ответы длинные, иначе просто один чанк
+            chunks = [anwser]
+            for ch in chunks:
+                vec = embedder.encode(ch).astype(np.float32)
+                # Используем уникальный id из таблицы, если он есть, иначе генерируем UUID
+                raw_id = payload.get("id")
+                if raw_id is None or str(raw_id).strip() == "":
+                    pid = str(uuid.uuid4())
+                else:
+                    pid = str(raw_id)
+                point_payload = dict(payload)
+                point_payload["anwser"] = ch
                 point = PointStruct(
-                    id=pid,                                            # Уникальный ID точки
-                    vector=vec,                                         # Эмбеддинг чанка
-                    payload=point_payload                               # Метаданные: title/url/image/... для ответа бота
+                    id=pid,
+                    vector=vec,
+                    payload=point_payload
                 )
-                points_batch.append(point)                              # Кладём точку в батч
-                total_chunks += 1                                       # Увеличиваем счётчик чанков
-
-                # Чтобы не держать всё в памяти — флашим батчами, например по 500 точек
+                points_batch.append(point)
+                total_chunks += 1
                 if len(points_batch) >= 500:
-                    client.upsert(collection_name=COLLECTION_NAME, points=points_batch)  # Запись батча в Qdrant
-                    points_batch = []                                                     # Очищаем накопитель
+                    print("POINTS TO UPSERT:", points_batch)
+                    client.upsert(collection_name=COLLECTION_NAME, points=points_batch)
+                    points_batch = []
 
     # Записываем «хвост» (остатки менее 500)
     if points_batch:

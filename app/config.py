@@ -17,12 +17,14 @@ CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50
 
 SHEETS_CONFIG = {
-    "Rules": {
-        "question_col": "Question",
-        "answer_col": "Answer"
-    },
-    "History": {
-        "question_col": "Event",
-        "answer_col": "Description"
+    "FAQ": {
+        "id_col": "id",
+        "question_col": "question",
+        "answer_col": "anwser",
+        "category_col": "category",
+        "tags_col": "tags",
+        "sourse_col": "sourse",
+        "image_url_col": "image_url",
+        "last_updated_col": "last_updated"
     }
 }
