@@ -1,538 +1,420 @@
-"""
-Bowling RAG API - FastAPI Application
-RAG system for bowling information with GigaChat integration and Sber Graph compatibility
-"""
-
+import time
+import base64
+import httpx
 import logging
-import asyncio
-from typing import Optional, Dict, Any, List
-from contextlib import asynccontextmanager
-
-from fastapi import FastAPI, HTTPException, Query, Request
+import os
+from fastapi import FastAPI, HTTPException, Request, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import httpx
-import uvicorn
-
+from sentence_transformers import SentenceTransformer
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qmodels
 from app.config import (
-    # Database
-    QDRANT_HOST, QDRANT_API_KEY, COLLECTION_NAME,
-    # Embeddings
-    EMBEDDING_MODEL_NAME,
-    # GigaChat
-    GIGACHAT_AUTH_KEY, GIGACHAT_BASE, GIGACHAT_SCOPE, GIGACHAT_MODEL,
-    # Graph
-    GRAPH_SECRET,
-    # RAG parameters
-    TOP_K, MAX_QUERY_LEN, MAX_CONTEXT_LEN
+    GIGACHAT_BASE, GIGACHAT_SCOPE, GIGACHAT_AUTH_KEY, GIGACHAT_MODEL,
+    QDRANT_URL, QDRANT_API_KEY, QDRANT_COLLECTION, TOP_K, MAX_QUERY_LEN, MAX_CONTEXT_LEN,
+    EMBEDDING_MODEL_NAME, COLLECTION_NAME, EMBEDDING_DIM
 )
+from dotenv import load_dotenv
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# Загружаем переменные окружения из app/.env
+env_path = os.path.join(os.path.dirname(__file__), '.env')
+load_dotenv(env_path)
+
+# --- Логирование ---
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Forbidden words filter
-FORBIDDEN_WORDS = {
-    "мат", "трахать", "ебучий", "оскорбление", "sex", "наркотик", "оружие", "бомба", "террор", "убийство",
-    "fuck", "shit", "damn", "bitch", "asshole", "drug", "weapon", "bomb", "terror", "kill"
-}
-
-# Global variables for models
-embedder = None
-client = None
-http_client = None
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Application lifespan manager"""
-    global embedder, client, http_client
-
-    # Startup
-    logger.info("Starting Bowling RAG API...")
-
-    try:
-        # Initialize sentence transformer
-        from sentence_transformers import SentenceTransformer
-        embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
-        logger.info(f"Embedder initialized: {EMBEDDING_MODEL_NAME}")
-
-        # Initialize Qdrant client
-        from qdrant_client import QdrantClient
-        client = QdrantClient(url=QDRANT_HOST, api_key=QDRANT_API_KEY)
-        logger.info(f"Qdrant client initialized: {QDRANT_HOST}")
-
-        # Initialize HTTP client for GigaChat
-        http_client = httpx.AsyncClient(timeout=30.0)
-        logger.info("HTTP client initialized")
-
-        logger.info("✅ All services initialized successfully")
-
-    except Exception as e:
-        logger.error(f"Failed to initialize services: {e}")
-        raise
-
-    yield
-
-    # Shutdown
-    logger.info("Shutting down Bowling RAG API...")
-    if http_client:
-        await http_client.aclose()
-    logger.info("✅ Shutdown complete")
-
-# Initialize FastAPI app
+# --- FastAPI app ---
 app = FastAPI(
     title="Bowling RAG API",
-    description="RAG system for bowling information with GigaChat integration",
-    version="2.0.0",
-    lifespan=lifespan
+    description="RAG система для боулинга с интеграцией GigaChat и Sber Graph",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc"
 )
 
-# Add CORS middleware
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure for production
+    allow_origins=["*"],  # В продакшене заменить на конкретные домены
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Pydantic models
-class SearchRequest(BaseModel):
-    query: str
-    top_k: Optional[int] = TOP_K
-
-class GraphRequest(BaseModel):
-    query: str
-    user_id: Optional[str] = None
-
-class HealthResponse(BaseModel):
-    status: str
-    version: str
-    services: Dict[str, str]
-
-# Utility functions
-def format_context(search_results: List) -> str:
-    """Format search results into context string, filtering sensitive data"""
-    if not search_results:
-        return "No relevant information found."
-
-    context_parts = []
-    for i, result in enumerate(search_results[:TOP_K], 1):
-        payload = result.payload
-
-        # Filter out UUIDs and sensitive data
-        question = str(payload.get("question", "")).replace("uuid", "[ID]").replace("UUID", "[ID]")
-        answer = str(payload.get("answer", "")).replace("uuid", "[ID]").replace("UUID", "[ID]")
-
-        context_parts.append(f"{i}. Q: {question}\n   A: {answer}")
-
-    return "\n\n".join(context_parts)
-
-def filter_forbidden_content(text: str) -> bool:
-    """Check if text contains forbidden words"""
-    text_lower = text.lower()
-    return any(word in text_lower for word in FORBIDDEN_WORDS)
-
-async def get_gigachat_token() -> str:
-    """Get GigaChat access token"""
-    try:
-        auth_data = {
-            "scope": GIGACHAT_SCOPE,
-            "client_id": "your_client_id",  # Configure in production
-            "client_secret": GIGACHAT_AUTH_KEY
-        }
-
-        response = await http_client.post(
-            f"{GIGACHAT_BASE}/oauth/token",
-            data=auth_data,
-            headers={"Content-Type": "application/x-www-form-urlencoded"}
-        )
-
-        if response.status_code == 200:
-            return response.json()["access_token"]
-        else:
-            logger.error(f"Failed to get token: {response.status_code}")
-            raise HTTPException(status_code=500, detail="Authentication failed")
-
-    except Exception as e:
-        logger.error(f"Token request error: {e}")
-        raise HTTPException(status_code=500, detail="Authentication service unavailable")
-
-async def gigachat_complete(prompt: str, context: str = "") -> str:
-    """Get completion from GigaChat"""
-    try:
-        token = await get_gigachat_token()
-
-        messages = []
-        if context:
-            messages.append({
-                "role": "system",
-                "content": f"Use this context to answer the question: {context}"
-            })
-
-        messages.append({
-            "role": "user",
-            "content": prompt
-        })
-
-        payload = {
-            "model": GIGACHAT_MODEL,
-            "messages": messages,
-            "max_tokens": MAX_CONTEXT_LEN
-        }
-
-        response = await http_client.post(
-            f"{GIGACHAT_BASE}/chat/completions",
-            json=payload,
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json"
-            }
-        )
-
-        if response.status_code == 200:
-            result = response.json()
-            return result["choices"][0]["message"]["content"]
-        else:
-            logger.error(f"GigaChat API error: {response.status_code}")
-            return "Извините, произошла ошибка при обработке запроса."
-
-    except Exception as e:
-        logger.error(f"GigaChat completion error: {e}")
-        return "Извините, сервис временно недоступен."
-
-# API endpoints
-@app.get("/health", response_model=HealthResponse)
+# --- Health check endpoint ---
+@app.get("/health")
 async def health_check():
-    """Health check endpoint"""
-    services_status = {}
-
-    try:
-        # Check embedder
-        if embedder is not None:
-            services_status["embedder"] = "healthy"
-        else:
-            services_status["embedder"] = "unhealthy"
-
-        # Check Qdrant
-        if client is not None:
-            services_status["qdrant"] = "healthy"
-        else:
-            services_status["qdrant"] = "unhealthy"
-
-        # Check HTTP client
-        if http_client is not None:
-            services_status["http_client"] = "healthy"
-        else:
-            services_status["http_client"] = "unhealthy"
-
-    except Exception as e:
-        logger.error(f"Health check error: {e}")
-        services_status["error"] = str(e)
-
-    overall_status = "healthy" if all(s == "healthy" for s in services_status.values()) else "unhealthy"
-
-    return HealthResponse(
-        status=overall_status,
-        version="2.0.0",
-        services=services_status
-    )
-
-@app.get("/ready")
-async def readiness_check():
-    """Readiness check endpoint"""
-    try:
-        # Quick checks
-        if embedder is None or client is None or http_client is None:
-            raise HTTPException(status_code=503, detail="Services not ready")
-
-        return {"status": "ready", "message": "All services are ready"}
-    except Exception as e:
-        logger.error(f"Readiness check failed: {e}")
-        raise HTTPException(status_code=503, detail="Service not ready")
-
-@app.post("/search")
-async def search(request: SearchRequest):
-    """Legacy search endpoint"""
-    if filter_forbidden_content(request.query):
-        return {"results": [], "message": "Не разговариваю на такие темы :) Спроси что-нибудь другое"}
-
-    try:
-        query_vec = embedder.encode(request.query).tolist()
-        search_result = client.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_vec,
-            limit=request.top_k * 5
-        )
-
-        filtered = []
-        for point in search_result:
-            payload = point.payload
-            question = str(payload.get("question", "")).lower()
-            answer = str(payload.get("answer", "")).lower()
-            query_lower = request.query.lower()
-
-            if query_lower in question or query_lower in answer:
-                filtered.append(point)
-
-        if len(filtered) >= 3:
-            results = filtered[:request.top_k]
-        else:
-            results = search_result[:request.top_k]
-
-        return {
-            "results": [
-                {
-                    "question": point.payload.get("question", ""),
-                    "answer": point.payload.get("answer", ""),
-                    "score": point.score
-                }
-                for point in results
-            ]
-        }
-
-    except Exception as e:
-        logger.error(f"Search error: {e}")
-        raise HTTPException(status_code=500, detail="Search service error")
-
-@app.post("/rag-answer")
-async def rag_answer(request: GraphRequest):
-    """RAG answer endpoint for Sber Graph"""
-    try:
-        # Validate request
-        if not request.query or len(request.query.strip()) == 0:
-            raise HTTPException(status_code=400, detail="Query cannot be empty")
-
-        if len(request.query) > MAX_QUERY_LEN:
-            raise HTTPException(status_code=400, detail=f"Query too long (max {MAX_QUERY_LEN} chars)")
-
-        # Check for forbidden content
-        if filter_forbidden_content(request.query):
-            return {
-                "answer": "Не разговариваю на такие темы :) Спроси что-нибудь другое",
-                "user_id": request.user_id
-            }
-
-        # Search for relevant documents
-        query_vec = embedder.encode(request.query).tolist()
-        search_results = client.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_vec,
-            limit=TOP_K * 2
-        )
-
-        # Format context
-        context = format_context(search_results)
-
-        # Generate answer with GigaChat
-        prompt = f"Ответь на вопрос пользователя на основе предоставленной информации о боулинге. Если информации недостаточно, скажи об этом.\n\nВопрос: {request.query}"
-        answer = await gigachat_complete(prompt, context)
-
-        return {
-            "answer": answer,
-            "user_id": request.user_id,
-            "context_used": len(search_results) > 0
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"RAG answer error: {e}")
-        raise HTTPException(status_code=500, detail="RAG service error")
-
-@app.post("/rag-answer-func")
-async def rag_answer_func(request: GraphRequest):
-    """RAG answer with function calling for Sber Graph"""
-    try:
-        # Validate request
-        if not request.query or len(request.query.strip()) == 0:
-            raise HTTPException(status_code=400, detail="Query cannot be empty")
-
-        if len(request.query) > MAX_QUERY_LEN:
-            raise HTTPException(status_code=400, detail=f"Query too long (max {MAX_QUERY_LEN} chars)")
-
-        # Check for forbidden content
-        if filter_forbidden_content(request.query):
-            return {
-                "answer": "Не разговариваю на такие темы :) Спроси что-нибудь другое",
-                "user_id": request.user_id,
-                "function_called": False
-            }
-
-        # Search for relevant documents
-        query_vec = embedder.encode(request.query).tolist()
-        search_results = client.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_vec,
-            limit=TOP_K * 2
-        )
-
-        # Format context
-        context = format_context(search_results)
-
-        # Use function calling for more structured response
-        functions = [
-            {
-                "name": "get_bowling_info",
-                "description": "Get information about bowling",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "topic": {
-                            "type": "string",
-                            "description": "The specific bowling topic"
-                        },
-                        "detail_level": {
-                            "type": "string",
-                            "enum": ["basic", "detailed", "expert"],
-                            "description": "Level of detail required"
-                        }
-                    },
-                    "required": ["topic"]
-                }
-            }
-        ]
-
-        # Generate answer with function calling
-        prompt = f"Ты эксперт по боулингу. Ответь на вопрос пользователя, используя предоставленную информацию. Будь полезным и информативным.\n\nВопрос: {request.query}"
-        answer = await gigachat_complete(prompt, context)
-
-        return {
-            "answer": answer,
-            "user_id": request.user_id,
-            "function_called": True,
-            "context_used": len(search_results) > 0
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"RAG function answer error: {e}")
-        raise HTTPException(status_code=500, detail="RAG function service error")
-
-@app.get("/")
-async def root():
-    """Root endpoint"""
+    """Health check endpoint для мониторинга"""
     return {
-        "message": "Bowling RAG API v2.0.0",
-        "docs": "/docs",
-        "health": "/health"
+        "status": "healthy",
+        "timestamp": time.time(),
+        "version": "1.0.0"
     }
 
-if __name__ == "__main__":
-    uvicorn.run(
-        "app.main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        log_level="info"
+# --- Readiness check endpoint ---
+@app.get("/ready")
+async def readiness_check():
+    """Readiness check - проверяет готовность всех зависимостей"""
+    try:
+        # Проверяем подключение к Qdrant
+        if client is None:
+            raise Exception("Qdrant client not initialized")
+
+        # Проверяем доступность коллекции
+        try:
+            collections = client.get_collections()
+            collection_names = [c.name for c in collections.collections]
+            if COLLECTION_NAME not in collection_names:
+                logger.warning(f"Collection '{COLLECTION_NAME}' not found. Available: {collection_names}")
+                # Создаем коллекцию если не существует
+                client.create_collection(
+                    collection_name=COLLECTION_NAME,
+                    vectors_config=qmodels.VectorParams(
+                        size=EMBEDDING_DIM,
+                        distance=qmodels.Distance.COSINE
+                    )
+                )
+                logger.info(f"Created collection '{COLLECTION_NAME}'")
+        except Exception as qdrant_error:
+            logger.error(f"Qdrant operation failed: {qdrant_error}")
+            raise qdrant_error
+
+        return {"status": "ready", "services": {"qdrant": "ok", "embedder": "ok"}}
+    except Exception as e:
+        logger.error(f"Readiness check failed: {e}")
+        raise HTTPException(503, f"Service not ready: {str(e)}")
+
+# --- Инициализация эмбеддера и Qdrant ---
+embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
+
+# Инициализация Qdrant с fallback
+try:
+    if QDRANT_URL and QDRANT_URL.startswith('http'):
+        logger.info(f"Connecting to Qdrant Cloud: {QDRANT_URL}")
+        client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+    else:
+        logger.info("Using local Qdrant instance")
+        client = QdrantClient(host="localhost", port=6333)
+    logger.info("Qdrant client initialized successfully")
+except Exception as e:
+    logger.warning(f"Failed to initialize Qdrant client: {e}")
+    logger.warning("Using mock client for development")
+    client = None
+
+# --- Кэш токена GigaChat ---
+_token_cache = {"access_token": None, "expires_at": 0}
+
+async def get_gigachat_token():
+    # Попробуем использовать готовый токен из .env, если он есть
+    access_token = os.getenv("GIGACHAT_ACCESS_TOKEN")
+    if access_token:
+        logger.info("Using access token from .env")
+        return access_token
+        
+    now = time.time()
+    if _token_cache["access_token"] and _token_cache["expires_at"] - now > 30:
+        logger.info("Using cached token")
+        return _token_cache["access_token"]
+    url = f"{GIGACHAT_BASE}/oauth/token"
+    logger.info(f"Requesting token from: {url}")
+    headers = {
+        "Authorization": f"Basic {GIGACHAT_AUTH_KEY}",
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+    data = {"scope": GIGACHAT_SCOPE}
+    logger.info(f"Auth headers: Authorization: Basic {GIGACHAT_AUTH_KEY[:20]}...")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(url, headers=headers, data=data)
+            logger.info(f"Token request status: {r.status_code}")
+            if r.status_code != 200:
+                logger.error(f"GigaChat auth failed: {r.status_code} {r.text}")
+                raise HTTPException(500, f"Auth failed: {r.text}")
+            tok = r.json()
+            _token_cache["access_token"] = tok["access_token"]
+            _token_cache["expires_at"] = now + int(tok.get("expires_in", 600))
+            logger.info("Token obtained successfully")
+            return _token_cache["access_token"]
+    except httpx.RequestError as e:
+        logger.error(f"Token request error: {e}")
+        raise HTTPException(500, f"Token request error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Token unexpected error: {e}")
+        raise HTTPException(500, f"Token unexpected error: {str(e)}")
+
+def format_context(points):
+    chunks = []
+    for p in points:
+        payload = p.payload or {}
+        text = payload.get("answer") or payload.get("text") or payload.get("chunk") or ""
+        question = payload.get("question") or payload.get("title") or ""
+        url = payload.get("url") or payload.get("source") or payload.get("source_url") or ""
+        tag = payload.get("tags") or payload.get("category") or ""
+        # Исключаем id из текста — фильтруем url, если id случайно попал
+        id_value = str(payload.get("id", ""))
+        if id_value:
+            url = url.replace(id_value, "").strip()
+        piece = f"— {question} {f'[{tag}]' if tag else ''}\n{text}\nИсточник: {url}".strip()
+        chunks.append(piece)
+    context = "\n\n".join(chunks)
+    # Ограничиваем длину контекста
+    return context[:MAX_CONTEXT_LEN]
+
+async def gigachat_complete(messages, attachments=None, stream=False, temperature=0.2, functions=None):
+    token = await get_gigachat_token()
+    logger.info(f"Token obtained: {token[:10]}...")
+    url = f"{GIGACHAT_BASE}/chat/completions"
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    body = {
+        "model": GIGACHAT_MODEL,
+        "messages": messages,
+        "temperature": temperature,
+    }
+    if attachments:
+        body["attachments"] = attachments
+    if stream:
+        body["stream"] = True
+    if functions:
+        body["functions"] = functions
+    logger.info(f"Sending request to GigaChat: {url}")
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            logger.info(f"Attempting to connect to: {url}")
+            r = await client.post(url, headers=headers, json=body)
+            logger.info(f"GigaChat response status: {r.status_code}")
+            if r.status_code != 200:
+                logger.error(f"GigaChat error: {r.status_code} {r.text}")
+                raise HTTPException(r.status_code, f"GigaChat error: {r.text}")
+            return r.json()
+    except httpx.RequestError as e:
+        logger.error(f"Request error: {e}")
+        raise HTTPException(500, f"Request error: {str(e)}")
+    except Exception as e:
+        logger.error(f"Unexpected error: {e}")
+        raise HTTPException(500, f"Unexpected error: {str(e)}")
+
+# --- Функция для поиска документов (для function-calling) ---
+def get_documents(query: str, top_k: int = TOP_K):
+    """Функция для поиска релевантных документов в Qdrant."""
+    if client is None:
+        logger.warning("Qdrant client not available, returning empty results")
+        return []
+
+    try:
+        q_vec = embedder.encode(query).tolist()
+        res = client.search(
+            collection_name=QDRANT_COLLECTION,
+            query_vector=q_vec,
+            limit=top_k,
+            with_payload=True,
+            with_vectors=False,
+            search_params=qmodels.SearchParams(hnsw_ef=256, exact=False),
+        )
+        docs = []
+        for p in res:
+            payload = p.payload
+            docs.append({
+                "question": payload.get("question", ""),
+                "answer": payload.get("answer", ""),
+                "category": payload.get("category", ""),
+                "tags": payload.get("tags", ""),
+                "source": payload.get("source", ""),
+                "score": p.score
+            })
+        return docs
+    except Exception as e:
+        logger.error(f"Error searching documents: {e}")
+        return []
+
+# --- Модель запроса от Graph ---
+class GraphRequest(BaseModel):
+    userId: str
+    queryText: str
+    action: str = ""
+    rawRequest: dict = {}
+
+# --- Модель запроса для чата ---
+class ChatRequest(BaseModel):
+    message: str
+
+# --- Endpoint /rag-answer для интеграции с Sber Graph ---
+@app.post("/rag-answer")
+async def rag_answer(req: Request, x_graph_secret: str = Header(None)):
+    # Аутентификация
+    graph_secret = os.getenv("GRAPH_SECRET")
+    if not graph_secret or x_graph_secret != graph_secret:
+        raise HTTPException(status_code=403, detail="Invalid Graph secret")
+
+    # Проверка доступности Qdrant
+    if client is None:
+        return {"answer": "Сервис поиска временно недоступен. Попробуйте позже.", "buttons": []}
+
+    data = await req.json()
+    user_id = data.get("userId", "")
+    query_text = data.get("queryText", "")
+    action = data.get("action", "")
+    raw_request = data.get("rawRequest", {})
+
+    if not query_text:
+        return {"answer": "Пожалуйста, задайте вопрос.", "buttons": []}
+
+    # Ограничение длины запроса
+    if len(query_text) > MAX_QUERY_LEN:
+        return {"answer": f"Запрос слишком длинный (>{MAX_QUERY_LEN} символов).", "buttons": []}
+
+    # Вариант A: Классический prompt-RAG
+    # 1) Эмбеддинг вопроса
+    q_vec = embedder.encode(query_text).tolist()
+    # 2) Поиск в Qdrant
+    try:
+        res = client.search(
+            collection_name=QDRANT_COLLECTION,
+            query_vector=q_vec,
+            limit=TOP_K,
+            with_payload=True,
+            with_vectors=False,
+            search_params=qmodels.SearchParams(hnsw_ef=256, exact=False),
+        )
+        hits = res
+    except Exception as e:
+        logger.error(f"Qdrant search failed: {e}")
+        return {"answer": "Ошибка поиска документов. Попробуйте позже.", "buttons": []}
+    # 3) Контекст
+    context = format_context(hits) if hits else ""
+    # 4) Системный промпт
+    system = (
+        "Ты помощник для команды Brooklyn Bowl - сети боулинг ресторанов, отвечающий строго на основе предоставленного контекста.\n"
+        "Ты доброжелателен, отвечаешь по делу и не уходишь в сторону.\n"
+        "Не упоминай UUID, id или технические идентификаторы в ответе.\n"
+        "Если в контексте нет ответа — скажи об этом прямо. Кратко, по делу.\n"
     )
+    user_msg = f"Вопрос: {query_text}\n\nКонтекст:\n{context or '—'}"
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_msg},
+    ]
 
-
-
-# POST endpoint (обновлённый)
-@app.post("/search")
-async def search(request: SearchRequest):
-    query_lower = request.query.lower()
-    for forbidden in FORBIDDEN_WORDS:
-        if forbidden in query_lower:
-            return {"results": [], "message": "Не разговариваю на такие темы :) Спроси что-нибудь другое"}
     try:
-        query_vec = embedder.encode(request.query).tolist()
-        search_result = client.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_vec,
-            limit=request.top_k * 5
-        )
-        filtered = []
-        for point in search_result:
-            payload = point.payload
-            question = str(payload.get("question", "")).lower()
-            anwser = str(payload.get("anwser", "")).lower()
-            if query_lower in question or query_lower in anwser:
-                filtered.append(point)
-        if len(filtered) >= 3:
-            return {"results": [], "message": "Опиши свой запрос более конкретно"}
-        if filtered:
-            final_points = filtered[:request.top_k]
-        else:
-            final_points = search_result[:request.top_k]
-        results = []
-        for point in final_points:
-            payload = point.payload
-            results.append({
-                "question": payload.get("question"),
-                "anwser": payload.get("anwser"),
-                "category": payload.get("category"),
-                "tags": payload.get("tags"),
-                "sourse": payload.get("sourse"),
-                "image_url": payload.get("image_url"),
-                "last_updated": payload.get("last_updated"),
-                "score": point.score
-            })
-        return {"results": results}
+        completion = await gigachat_complete(messages)
+        answer = completion["choices"][0]["message"]["content"]
+        # Динамические кнопки (пример: если вопрос о правилах, предложить "Турниры")
+        buttons = []
+        if "правил" in query_text.lower():
+            buttons = [{"text": "Расскажи о турнирах", "callback_data": "tournaments"}]
+        return {"answer": answer, "buttons": buttons}
     except Exception as e:
-        return {"results": [], "error": str(e)}
+        logger.exception(f"RAG error: {e}")
+        return {"answer": f"Ошибка обработки запроса: {str(e)}", "buttons": []}
 
-# Новый GET endpoint для поддержки запросов через URL
-@app.get("/search")
-async def search_get(
-    query: str = Query(..., description="Поисковый запрос"),
-    top_k: int = Query(3, description="Количество результатов")
-):
-    # Проверка на запрещённые слова
-    query_lower = query.lower()
-    for forbidden in FORBIDDEN_WORDS:
-        if forbidden in query_lower:
-            return {"results": [], "message": "Не разговариваю на такие темы :) Спроси что-нибудь другое"}
+# --- Альтернативный endpoint с function-calling (Вариант B) ---
+@app.post("/rag-answer-func")
+async def rag_answer_func(req: Request, x_graph_secret: str = Header(None)):
+    # Аутентификация
+    graph_secret = os.getenv("GRAPH_SECRET")
+    if not graph_secret or x_graph_secret != graph_secret:
+        raise HTTPException(status_code=403, detail="Invalid Graph secret")
+
+    data = await req.json()
+    user_id = data.get("userId", "")
+    query_text = data.get("queryText", "")
+
+    if not query_text:
+        return {"answer": "Пожалуйста, задайте вопрос.", "buttons": []}
+
+    # Определение функций для GigaChat
+    functions = [
+        {
+            "name": "get_documents",
+            "description": "Поиск релевантных документов по запросу пользователя",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Поисковый запрос"},
+                    "top_k": {"type": "integer", "description": "Количество документов", "default": 5}
+                },
+                "required": ["query"]
+            }
+        }
+    ]
+
+    messages = [
+        {"role": "system", "content": "Ты помощник по боулингу. Используй функцию get_documents для поиска информации. Не упоминай UUID, id или технические идентификаторы в ответе."},
+        {"role": "user", "content": query_text}
+    ]
+
     try:
-        query_vec = embedder.encode(query).tolist()
-        # Векторный поиск
-        search_result = client.search(
-            collection_name=COLLECTION_NAME,
-            query_vector=query_vec,
-            limit=top_k * 5  # ищем больше кандидатов для keyword-фильтрации
-        )
-        # Keyword-фильтрация: ищем совпадение слова в question или anwser
-        filtered = []
-        for point in search_result:
-            payload = point.payload
-            question = str(payload.get("question", "")).lower()
-            anwser = str(payload.get("anwser", "")).lower()
-            if query_lower in question or query_lower in anwser:
-                filtered.append(point)
-        # Если keyword-совпадений 3 и больше — просим уточнить запрос
-        if len(filtered) >= 3:
-            return {"results": [], "message": "Опиши свой запрос более конкретно"}
-        # Если есть keyword-совпадения — берем top_k
-        if filtered:
-            final_points = filtered[:top_k]
-        else:
-            final_points = search_result[:top_k]
-        results = []
-        for point in final_points:
-            payload = point.payload
-            results.append({
-                "question": payload.get("question"),
-                "anwser": payload.get("anwser"),
-                "category": payload.get("category"),
-                "tags": payload.get("tags"),
-                "sourse": payload.get("sourse"),
-                "image_url": payload.get("image_url"),
-                "last_updated": payload.get("last_updated"),
-                "score": point.score
-            })
-        return {"results": results}
-    except Exception as e:
-        return {"results": [], "error": str(e)}
+        completion = await gigachat_complete(messages, functions=functions)
+        message = completion["choices"][0]["message"]
 
-# --- Комментарий: этот эндпоинт вызывается Gigachat Salutebot через Telegram-бота ---
-# Пример запроса:
-# {
-#   "query": "Каковы правила игры в боулинг?",
-#   "top_k": 3
-# }
-# Ответ: JSON с найденными результатами из вашей Google таблицы через Qdrant
+        if "function_call" in message:
+            # Модель вызвала функцию
+            func_call = message["function_call"]
+            if func_call["name"] == "get_documents":
+                args = eval(func_call["arguments"])  # В продакшене использовать json.loads
+                docs = get_documents(args["query"], args.get("top_k", TOP_K))
+                # Добавляем результат функции в сообщения
+                messages.append(message)
+                messages.append({
+                    "role": "function",
+                    "name": "get_documents",
+                    "content": str(docs)
+                })
+                # Повторный вызов для финального ответа
+                final_completion = await gigachat_complete(messages)
+                answer = final_completion["choices"][0]["message"]["content"]
+            else:
+                answer = "Неизвестная функция."
+        else:
+            answer = message["content"]
+
+        return {"answer": answer, "buttons": []}
+    except Exception as e:
+        logger.exception(f"Function-calling error: {e}")
+        return {"answer": f"Ошибка: {str(e)}", "buttons": []}
+
+# --- Старые endpoints для совместимости ---
+class RAGRequest(BaseModel):
+    query: str
+    user_id: str | None = None
+    chat_id: str | None = None
+
+@app.post("/rag-answer-old")
+async def rag_answer_old(req: RAGRequest):
+    logger.info(f"RAG answer old called with query: {req.query}, user_id: {req.user_id}")
+    # Перенаправление на новый endpoint (для совместимости)
+    import json
+    fake_request = {"userId": req.user_id or "", "queryText": req.query}
+    fake_body = json.dumps(fake_request).encode('utf-8')
+    
+    async def fake_receive():
+        return {"body": fake_body, "type": "http.request", "more_body": False}
+    
+    fake_request_obj = Request(
+        scope={"type": "http", "method": "POST", "path": "/", "headers": []}, 
+        receive=fake_receive
+    )
+    logger.info("Calling rag_answer with fake request")
+    result = await rag_answer(fake_request_obj, x_graph_secret=os.getenv("GRAPH_SECRET"))
+    logger.info(f"RAG answer old result: {result}")
+    return result
+
+# --- Endpoint для общения с GigaChat напрямую ---
+@app.post("/chat")
+async def chat_with_gigachat(request: ChatRequest):
+    logger.info(f"Chat endpoint called with message: {request.message}")
+    try:
+        logger.info(f"Received chat request with message: {request.message}")
+        messages = [{"role": "user", "content": request.message}]
+        completion = await gigachat_complete(messages)
+        answer = completion["choices"][0]["message"]["content"]
+        logger.info(f"Chat response: {answer}")
+        return {"response": answer}
+    except Exception as e:
+        logger.error(f"Error in /chat: {e}")
+        raise HTTPException(500, f"Internal server error: {str(e)}")
+
+# --- Запуск сервера ---
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
