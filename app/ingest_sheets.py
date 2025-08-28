@@ -1,29 +1,284 @@
-# app/ingest_sheets.py
+"""
+Google Sheets data ingestion for Bowling RAG system
+Loads data from Google Sheets, processes it, and stores in Qdrant vector database
+"""
 
-import uuid                                              # Для генерации уникальных ID точек (чанков)
-from typing import List, Dict, Any                       # Подсказки типов — удобнее читать код
-import numpy as np                                       # Работа с векторами (float32)
-from tqdm import tqdm                                    # Красивый прогресс-бар
-from datetime import datetime                            # Работа с датами (не обязательно, но полезно)
+import uuid
+from typing import List, Dict, Any, Optional
+import numpy as np
+from tqdm import tqdm
+from datetime import datetime
 
-import gspread                                            # Клиент для Google Sheets
-from google.oauth2.service_account import Credentials     # Аутентификация сервисного аккаунта
+import gspread
+from google.oauth2.service_account import Credentials
 
-from sentence_transformers import SentenceTransformer     # Модель эмбеддингов (векторизация текста)
-from qdrant_client import QdrantClient                    # Клиент Qdrant
-from qdrant_client.models import VectorParams, Distance, PointStruct  # Описание коллекции/точек
+from sentence_transformers import SentenceTransformer
+from qdrant_client import QdrantClient
+from qdrant_client.models import VectorParams, Distance, PointStruct
 
 import os
 from dotenv import load_dotenv
+
+# Load environment variables
 load_dotenv()
-from config import (
+
+from app.config import (
     SERVICE_ACCOUNT_FILE,
     SPREADSHEET_ID,
     QDRANT_HOST, QDRANT_API_KEY, COLLECTION_NAME,
-    EMBEDDING_MODEL_NAME,
+    EMBEDDING_MODEL_NAME, EMBEDDING_DIM,
     SHEETS_CONFIG,
     CHUNK_SIZE, CHUNK_OVERLAP
 )
+
+def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
+    """Split text into overlapping chunks of specified size"""
+    if not text:
+        return []
+
+    text = str(text).strip()
+    if len(text) <= chunk_size:
+        return [text]
+
+    chunks = []
+    step = max(1, chunk_size - overlap)
+
+    for start in range(0, len(text), step):
+        piece = text[start:start + chunk_size]
+        if len(piece) < 50:  # Skip very small chunks
+            break
+        chunks.append(piece)
+        if start + chunk_size >= len(text):
+            break
+
+    return chunks
+
+def ensure_collection(client: QdrantClient, vector_size: int):
+    """Create or recreate collection if vector size changed"""
+    if not client.collection_exists(COLLECTION_NAME):
+        print(f"[INFO] Collection '{COLLECTION_NAME}' not found, creating new...")
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=vector_size, distance=Distance.COSINE)
+        )
+        print(f"[SUCCESS] Collection '{COLLECTION_NAME}' created")
+    else:
+        print(f"[INFO] Collection '{COLLECTION_NAME}' already exists")
+
+def authenticate_gsheets():
+    """Authenticate with Google Sheets API"""
+    try:
+        creds = Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE,
+            scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
+        )
+        client = gspread.authorize(creds)
+        print("[SUCCESS] Google Sheets authentication successful")
+        return client
+    except Exception as e:
+        print(f"[ERROR] Google Sheets authentication failed: {e}")
+        raise
+
+def load_sheet_data(gs_client: gspread.Client, sheet_name: str) -> List[Dict[str, Any]]:
+    """Load data from specified Google Sheet"""
+    try:
+        spreadsheet = gs_client.open_by_key(SPREADSHEET_ID)
+        worksheet = spreadsheet.worksheet(sheet_name)
+
+        # Get all values
+        all_values = worksheet.get_all_values()
+
+        if not all_values:
+            print(f"[WARNING] Sheet '{sheet_name}' is empty")
+            return []
+
+        # First row is headers
+        headers = all_values[0]
+        rows = all_values[1:]
+
+        print(f"[INFO] Loaded {len(rows)} rows from sheet '{sheet_name}'")
+
+        # Convert to dictionary format
+        config = SHEETS_CONFIG.get(sheet_name, {})
+        data = []
+
+        for row_idx, row in enumerate(rows):
+            if not any(row):  # Skip empty rows
+                continue
+
+            row_data = {}
+            for col_idx, value in enumerate(row):
+                if col_idx < len(headers):
+                    header = headers[col_idx].lower().strip()
+                    row_data[header] = value
+
+            # Add UUID if not present
+            if 'uuid' not in row_data or not row_data['uuid']:
+                row_data['uuid'] = str(uuid.uuid4())
+
+            # Validate required fields
+            if not row_data.get('question') or not row_data.get('answer'):
+                print(f"[WARNING] Row {row_idx + 2} missing question or answer, skipping")
+                continue
+
+            data.append(row_data)
+
+        print(f"[SUCCESS] Processed {len(data)} valid entries from '{sheet_name}'")
+        return data
+
+    except Exception as e:
+        print(f"[ERROR] Failed to load data from sheet '{sheet_name}': {e}")
+        raise
+
+def process_faq_data(faq_data: List[Dict[str, Any]]) -> List[PointStruct]:
+    """Process FAQ data into Qdrant points"""
+    points = []
+
+    for item in tqdm(faq_data, desc="Processing FAQ data"):
+        try:
+            # Extract fields with corrected column names
+            question = str(item.get('question', '')).strip()
+            answer = str(item.get('answer', '')).strip()  # Fixed: was 'anwser'
+            category = str(item.get('category', '')).strip()
+            tags = str(item.get('tags', '')).strip()
+            source = str(item.get('source', '')).strip()  # Fixed: was 'sourse'
+            image_url = str(item.get('image_url', '')).strip()
+            last_updated = str(item.get('last_updated', '')).strip()
+            item_uuid = str(item.get('uuid', str(uuid.uuid4())))
+
+            # Skip if no content
+            if not question and not answer:
+                continue
+
+            # Create searchable text
+            searchable_text = f"{question} {answer}".strip()
+
+            # Create chunks if text is long
+            if len(searchable_text) > CHUNK_SIZE:
+                chunks = chunk_text(searchable_text, CHUNK_SIZE, CHUNK_OVERLAP)
+            else:
+                chunks = [searchable_text]
+
+            # Create points for each chunk
+            for chunk_idx, chunk in enumerate(chunks):
+                # Create unique ID for this chunk
+                chunk_id = f"{item_uuid}_chunk_{chunk_idx}"
+
+                # Prepare payload
+                payload = {
+                    "uuid": item_uuid,
+                    "chunk_id": chunk_id,
+                    "question": question,
+                    "answer": answer,
+                    "category": category,
+                    "tags": tags,
+                    "source": source,
+                    "image_url": image_url,
+                    "last_updated": last_updated,
+                    "chunk_text": chunk,
+                    "chunk_index": chunk_idx,
+                    "total_chunks": len(chunks),
+                    "created_at": datetime.now().isoformat()
+                }
+
+                # Generate embedding for the chunk
+                embedding = embedder.encode(chunk).tolist()
+
+                # Create point
+                point = PointStruct(
+                    id=chunk_id,
+                    vector=embedding,
+                    payload=payload
+                )
+
+                points.append(point)
+
+        except Exception as e:
+            print(f"[ERROR] Failed to process item {item.get('uuid', 'unknown')}: {e}")
+            continue
+
+    print(f"[SUCCESS] Created {len(points)} points from {len(faq_data)} FAQ items")
+    return points
+
+def upload_to_qdrant(client: QdrantClient, points: List[PointStruct]):
+    """Upload points to Qdrant in batches"""
+    if not points:
+        print("[WARNING] No points to upload")
+        return
+
+    batch_size = 100
+    total_uploaded = 0
+
+    try:
+        # Clear existing data (optional - comment out if you want to keep existing data)
+        print("[INFO] Clearing existing collection data...")
+        client.delete_collection(COLLECTION_NAME)
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=EMBEDDING_DIM, distance=Distance.COSINE)
+        )
+
+        # Upload in batches
+        for i in tqdm(range(0, len(points), batch_size), desc="Uploading to Qdrant"):
+            batch = points[i:i + batch_size]
+            client.upsert(collection_name=COLLECTION_NAME, points=batch)
+            total_uploaded += len(batch)
+
+        print(f"[SUCCESS] Uploaded {total_uploaded} points to Qdrant")
+
+    except Exception as e:
+        print(f"[ERROR] Failed to upload to Qdrant: {e}")
+        raise
+
+def main():
+    """Main ingestion function"""
+    print("🚀 Starting Bowling RAG data ingestion...")
+    print("=" * 50)
+
+    try:
+        # Initialize embedder
+        global embedder
+        print("[INFO] Initializing embedder...")
+        embedder = SentenceTransformer(EMBEDDING_MODEL_NAME)
+        print(f"[SUCCESS] Embedder initialized: {EMBEDDING_MODEL_NAME}")
+
+        # Initialize Qdrant client
+        print("[INFO] Initializing Qdrant client...")
+        qdrant_client = QdrantClient(url=QDRANT_HOST, api_key=QDRANT_API_KEY)
+        ensure_collection(qdrant_client, EMBEDDING_DIM)
+        print("[SUCCESS] Qdrant client initialized")
+
+        # Authenticate with Google Sheets
+        print("[INFO] Authenticating with Google Sheets...")
+        gs_client = authenticate_gsheets()
+
+        # Load FAQ data
+        print("[INFO] Loading FAQ data from Google Sheets...")
+        faq_data = load_sheet_data(gs_client, "FAQ")
+
+        if not faq_data:
+            print("[ERROR] No data loaded from Google Sheets")
+            return
+
+        # Process data into points
+        print("[INFO] Processing data into vector points...")
+        points = process_faq_data(faq_data)
+
+        # Upload to Qdrant
+        print("[INFO] Uploading data to Qdrant...")
+        upload_to_qdrant(qdrant_client, points)
+
+        print("=" * 50)
+        print("🎉 Data ingestion completed successfully!")
+        print(f"📊 Total points uploaded: {len(points)}")
+        print("🚀 Your RAG system is ready to use!")
+
+    except Exception as e:
+        print(f"[ERROR] Data ingestion failed: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()
 
 def chunk_text(text: str, chunk_size: int, overlap: int) -> List[str]:
     """Режем длинный текст на перекрывающиеся кусочки фиксированной длины."""
