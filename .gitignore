@@ -1,69 +1,7 @@
-/.venv
-README.MD
-/Inclde
-/Lib\site-paskages
-/Scripts
-/share
-pyvenv.cfg
-/__pycache__
-*.pyc
-service_account.json
-app/service_account.json
-*.json
-.env
-/all_about_project.txt
-ssh-ed255519.pub
-about_update_project.txt
-11.txt
-
-# Тестовые файлы (не нужны на сервере)
-test_*.py
-continuous_test.py
-api_test.py
-basic_test.py
-check_config.py
-comprehensive_test.py
-simple_test.py
-test_api.py
-test_chat.py
-test_chat_simple.py
-test_connection.py
-test_endpoints.py
-test_gigachat.py
-test_health.py
-test_rag_old.py
-test_rag_old_simple.py
-test_server.py
-test_token.py
-tests/
-
-# Тестовые HTML файлы
-test_*.html
-test_page.html
-test_ui.html
-
-# Отчеты о тестировании
-test_report.md
-fixes_report.md
-
-# Логи
-*.log
-logs/
-
-# IDE файлы
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS файлы
-.DS_Store
-Thumbs.db
-*.tmp
-*.temp
+# PRODUCTION GITIGNORE - Only essential files for deployment
 
 # Python
+__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -84,29 +22,91 @@ wheels/
 .installed.cfg
 *.egg
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
 
-# pyenv
-.python-version
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
 
-# pipenv
-Pipfile.lock
+# OS
+.DS_Store
+Thumbs.db
+*.tmp
+*.temp
 
-# PEP 582
-__pypackages__/
+# Logs
+*.log
+logs/
 
-# Celery
-celerybeat-schedule
-celerybeat.pid
+# Test files (should not be in repo)
+test_*.py
+*_test.py
+continuous_test.py
+tests/
+test_*.html
+test_page.html
+test_ui.html
 
-# SageMath parsed files
-*.sage.py
+# Specific test files
+test_api.py
+test_chat.py
+test_chat_simple.py
+test_connection.py
+test_endpoints.py
+test_gigachat.py
+test_health.py
+test_rag_old.py
+test_rag_old_simple.py
+test_server.py
+test_token.py
+api_test.py
+basic_test.py
+check_config.py
+comprehensive_test.py
+simple_test.py
 
-# Environments
+# Development files
+*.env
 .env.local
-.env.production
-.env.staging
+.env.*.local
+service_account.json
+ssh-*.pub
+ssh-ed255519.pub
+
+# Reports and documentation (remove for production)
+*_report.md
+GIT_*.md
+QUICK_*.md
+README.MD
+test_report.md
+fixes_report.md
+GIT_DOCKER_IGNORE.md
+GIT_COMMIT_STEPS.md
+QUICK_COMMIT.md
+PRODUCTION_FILES_LIST.md
+
+# Analysis and cleanup scripts
+analyze_repo_size.sh
+analyze_repo_size.ps1
+check_repo_size.ps1
+cleanup_for_git.sh
+
+# Development scripts (keep only deployment scripts)
+# Keep: deploy.sh, vps-deploy.sh, vps-setup.sh, quick-deploy.sh
+# Ignore: All other development scripts
+
+# Temporary files
+.tmp/
+temp/
+*.bak
+*.backup
 
 # Coverage
 .coverage
@@ -120,3 +120,34 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+
+# Docker
+.dockerignore
+
+# Git
+.gitignore
+
+# CI/CD (keep if using GitHub Actions)
+!.github/workflows/
+
+# Backup files
+.backup_before_cleanup/
+*.backup
+
+# Duplicate directories
+brooklyn-bowl-rag/
+
+# All about project files
+all_about_project.txt
+about_update_project.txt
+11.txt
+
+# Keep only essential files for production deployment
+# Everything else should be configured on server or ignored
