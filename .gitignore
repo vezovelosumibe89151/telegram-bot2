@@ -1,4 +1,4 @@
-# PRODUCTION GITIGNORE - Only essential files for deployment
+# CLEAN PYTHON PROJECT GITIGNORE
 
 # Python
 __pycache__/
@@ -45,109 +45,27 @@ Thumbs.db
 *.log
 logs/
 
-# Test files (should not be in repo)
-test_*.py
-*_test.py
-continuous_test.py
-tests/
-test_*.html
-test_page.html
-test_ui.html
-
-# Specific test files
-test_api.py
-test_chat.py
-test_chat_simple.py
-test_connection.py
-test_endpoints.py
-test_gigachat.py
-test_health.py
-test_rag_old.py
-test_rag_old_simple.py
-test_server.py
-test_token.py
-api_test.py
-basic_test.py
-check_config.py
-comprehensive_test.py
-simple_test.py
-
-# Development files
-*.env
+# Environment files (keep only .env.example)
+.env
 .env.local
 .env.*.local
+
+# Sensitive files
 service_account.json
 ssh-*.pub
-ssh-ed255519.pub
+*.pem
 
-# Reports and documentation (remove for production)
-*_report.md
-GIT_*.md
-QUICK_*.md
-README.MD
-test_report.md
-fixes_report.md
-GIT_DOCKER_IGNORE.md
-GIT_COMMIT_STEPS.md
-QUICK_COMMIT.md
-PRODUCTION_FILES_LIST.md
-
-# Analysis and cleanup scripts
-analyze_repo_size.sh
-analyze_repo_size.ps1
-check_repo_size.ps1
-cleanup_for_git.sh
-
-# Development scripts (keep only deployment scripts)
-# Keep: deploy.sh, vps-deploy.sh, vps-setup.sh, quick-deploy.sh
-# Ignore: All other development scripts
-
-# Temporary files
+# Backup and temporary files
+*.backup
+*.bak
+*.zip
 .tmp/
 temp/
-*.bak
-*.backup
 
-# Coverage
-.coverage
-htmlcov/
-.pytest_cache/
+# Test files (if any remain)
+test_*.py
+*_test.py
+tests/
 
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# Jupyter
-.ipynb_checkpoints/
-
-# Node.js (if any)
-node_modules/
-npm-debug.log*
-
-# Docker
-.dockerignore
-
-# Git
-.gitignore
-
-# CI/CD (keep if using GitHub Actions)
+# CI/CD (keep GitHub Actions)
 !.github/workflows/
-
-# Backup files
-.backup_before_cleanup/
-*.backup
-
-# Duplicate directories
-brooklyn-bowl-rag/
-
-# All about project files
-all_about_project.txt
-about_update_project.txt
-11.txt
-
-# Keep only essential files for production deployment
-# Everything else should be configured on server or ignored
